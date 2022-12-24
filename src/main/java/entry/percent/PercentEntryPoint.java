@@ -11,22 +11,27 @@ import core.FinderConstant;
 import core.action.candidate.Candidate;
 import core.action.reachable.Reachable;
 import core.field.Field;
+import core.field.FieldFactory;
 import core.field.FieldView;
 import core.mino.MinoFactory;
+import core.mino.Piece;
 import core.srs.MinoRotation;
 import entry.DropType;
 import entry.EntryPoint;
 import entry.Verify;
+import entry.common.option.OptionsFacade;
 import entry.path.output.MyFile;
 import entry.searching_pieces.NormalEnumeratePieces;
 import exceptions.FinderException;
 import exceptions.FinderExecuteException;
 import exceptions.FinderInitializeException;
+import exceptions.FinderParseException;
 import exceptions.FinderTerminateException;
 import lib.Stopwatch;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -211,6 +216,94 @@ public class PercentEntryPoint implements EntryPoint {
         output("done");
     }
 
+    @SuppressWarnings("unchecked")
+    public static Pair<String[], Boolean>[] run_invoked(int maxClearLine, Boolean isUsingHold, Boolean[] boolField, String[] patterns, int threadCount, String strDropType, String kickName) throws FinderException {
+        // Setup field
+        Field field = FieldFactory.createField(maxClearLine);
+        for (int y = 0; y < maxClearLine; y++)
+            for (int x = 0; x < 10; x++)
+                if (boolField.length > y * 10 + x && boolField[y * 10 + x])
+                    field.setBlock(x, y);
+        Verify.field(field);
+
+        // Setup max clear line
+        Verify.maxClearLineUnder24(maxClearLine);
+
+        // Setup max depth
+        int maxDepth = Verify.maxDepth(field, maxClearLine);  // パフェに必要なミノ数
+
+        // Setup patterns
+        PatternGenerator generator = Verify.patterns(Arrays.asList(patterns), maxDepth);
+
+        // Setup core
+        ExecutorService executorService = createExecutorService(threadCount);
+
+        DropType dropType = getDropType(strDropType);
+
+        // Holdができるときは必要なミノ分（maxDepth + 1）だけを取り出す。maxDepth + 1だけないときはブロックの個数をそのまま指定
+        int piecesDepth = generator.getDepth();
+        int popCount = isUsingHold && maxDepth < piecesDepth ? maxDepth + 1 : maxDepth;
+        if (popCount < piecesDepth) {
+            // warn
+        }
+
+        // 探索パターンの列挙
+        NormalEnumeratePieces normalEnumeratePieces = new NormalEnumeratePieces(generator, maxDepth, isUsingHold);
+        Set<LongPieces> searchingPieces = normalEnumeratePieces.enumerate();
+
+        // 探索を行う
+        Supplier<MinoRotation> minoRotationSupplier = OptionsFacade.createNamedMinoRotationSupplier(kickName).getSupplier();
+        ThreadLocal<? extends Candidate<Action>> candidateThreadLocal = createCandidateThreadLocal(minoRotationSupplier, dropType, maxClearLine);
+        ThreadLocal<? extends Reachable> reachableThreadLocal = createReachableThreadLocal(minoRotationSupplier, dropType, maxClearLine);
+        MinoFactory minoFactory = new MinoFactory();
+        PercentCore percentCore = new PercentCore(executorService, candidateThreadLocal, isUsingHold, reachableThreadLocal, minoFactory);
+        percentCore.run(field, searchingPieces, maxClearLine, maxDepth);
+
+        List<Pair<Pieces, Boolean>> resultPairs = percentCore.getResultPairs();
+
+        if (executorService != null)
+            executorService.shutdown();
+
+        return resultPairs.stream()
+            .map(pair -> new Pair<String[], Boolean>(
+                pair.getKey()
+                    .getPieces()
+                    .stream()
+                    .map(Piece::getName)
+                    .toArray(String[]::new),
+                pair.getValue()))
+            .toArray(Pair[]::new);
+    }
+
+    private static DropType getDropType(String type) throws FinderParseException {
+        switch (type.trim().toLowerCase()) {
+            case "softdrop":
+                return DropType.Softdrop;
+            case "harddrop":
+                return DropType.Harddrop;
+            case "softdrop180":
+                return DropType.Softdrop180;
+            case "t-softdrop":
+                return DropType.SoftdropTOnly;
+            default:
+                throw new FinderParseException("Unsupported droptype: type=" + type);
+        }
+    }
+
+    private static ExecutorService createExecutorService(int threadCount) throws FinderExecuteException {
+        if (threadCount == 1) {
+            // single thread
+            return null;
+        } else if (1 < threadCount) {
+            // Specified thread count
+            return Executors.newFixedThreadPool(threadCount);
+        } else {
+            // NOT specified thread count
+            int core = Runtime.getRuntime().availableProcessors();
+            return Executors.newFixedThreadPool(core);
+        }
+    }
+
     private ExecutorService createExecutorService() throws FinderExecuteException {
         int threadCount = settings.getThreadCount();
         if (threadCount == 1) {
@@ -229,7 +322,7 @@ public class PercentEntryPoint implements EntryPoint {
         }
     }
 
-    private ThreadLocal<? extends Candidate<Action>> createCandidateThreadLocal(
+    private static ThreadLocal<? extends Candidate<Action>> createCandidateThreadLocal(
             Supplier<MinoRotation> minoRotationSupplier, DropType dropType, int maxClearLine
     ) throws FinderInitializeException {
         boolean use180Rotation = dropType.uses180Rotation();
@@ -246,7 +339,7 @@ public class PercentEntryPoint implements EntryPoint {
         throw new FinderInitializeException("Unsupported droptype: droptype=" + dropType);
     }
 
-    private ThreadLocal<? extends Reachable> createReachableThreadLocal(
+    private static ThreadLocal<? extends Reachable> createReachableThreadLocal(
             Supplier<MinoRotation> minoRotationSupplier, DropType dropType, int maxClearLine
     ) throws FinderInitializeException {
         boolean use180Rotation = dropType.uses180Rotation();
