@@ -217,7 +217,7 @@ public class PercentEntryPoint implements EntryPoint {
     }
 
     @SuppressWarnings("unchecked")
-    public static Pair<String[], Boolean>[] run_invoked(Integer maxClearLine, Boolean isUsingHold, Boolean[] boolField, String[] patterns, int threadCount, String strDropType, String kickName) throws FinderException {
+    public static Pair<String[], Boolean>[] run_invoked(Integer maxClearLine, Boolean isUsingHold, Boolean[] boolField, String[] patterns, Integer threadCount, String strDropType, String kickName) throws FinderException {
         // Setup field
         Field field = FieldFactory.createField(maxClearLine);
         for (int y = 0; y < maxClearLine; y++)
